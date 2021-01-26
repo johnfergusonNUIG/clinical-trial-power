@@ -1,0 +1,90 @@
+
+## prior for the logOR is a mixture between a distribution centered on 0 with small variance (the null cluster), and a distribution centered on mu (the alternative cluster)
+## logOR_true ~ pi_0*N(0,sigma_null) + (1-pi_0)*N(mu,sigma)
+
+## parameters
+## pi_0 prior probability that the treatment is effective
+## p0 baseline event rate in comparator arm (assumed known)
+## n sample size (assumed equal in treatment and control group)
+## mu mean log OR under alternative
+## z observed Z-score: (phat_1-phat_0)/sqrt(phat_0*(1-phat_0)/n + phat_1*(1-phat_1)/n).  Note that the asymptotic normal approxiation to this Z-score is assumed in the calculations.  A z-score of 1.96 corresponds to a p-value of 0.05 for a two sided test, which is usual in clinical trials
+## n - number of samples for Monte carlo evaluation of posterior probability of alteranf
+
+
+post_probs <- function(pi_0=.8,p0=.1,n=100,mu=log(1.1),sigma=0.1,sigma_null=0.05,z,nsim=10^6){
+
+        OR_sim_1 <- exp(rnorm(nsim,mu,sigma))    # simulate ORs under treatment effect
+        odds_sim_1 <- (p0/(1-p0))*OR_sim_1
+        p1_sim <- odds_sim_1/(1+odds_sim_1)
+        OR_sim_0 <- exp(rnorm(nsim,0,sigma_null))    # simulate ORs under no treatment effect
+        odds_sim_0 <- (p0/(1-p0))*OR_sim_0
+        p0_sim <- odds_sim_0/(1+odds_sim_0)
+        sigma_H0 <- p0*(1-p0) + p0_sim*(1-p0_sim)   # variance of difference in observed proportions in the two arms under null
+        sigma_H1 <- p0*(1-p0) + p1_sim*(1-p1_sim)   # variance of difference in observed proportions in the two arms under alternative
+        alternative_mean_z <- (p1_sim-p0)/sqrt((p0*(1-p0)+p1_sim*(1-p1_sim))/n)  # simulated Z score means under alternative 
+        null_mean_z <- (p0_sim-p0)/sqrt((p0*(1-p0)+p0_sim*(1-p0_sim))/n) # simulated Z score means under null
+        null_sd_z <- 1 
+        alternative_sd_z <- 1   ## simulated variance of the z-score (assumed pooled test not used)  
+        icdf_alternative_sim <- 1-pnorm(abs(z),mean=alternative_mean_z,sd=alternative_sd_z) # inverse cdf of Z scores under alternative at z (conditional on simulated ORs)
+        pdf_alternative_sim <- dnorm(z,mean=alternative_mean_z,sd=alternative_sd_z) # pdf of Z scores at z under alternative  (conditional on simulated ORs)
+        icdf_null_sim <- 1-pnorm(abs(z),mean=null_mean_z,sd=null_sd_z) #inverse cdf of Z scores at z under null  (conditional on simulated ORs)
+        pdf_null_sim <- dnorm(z,mean=null_mean_z,sd=null_sd_z) #pdf of Z scoresat z  under null  (conditional on simulated ORs)
+        icdf_alternative <- mean(icdf_alternative_sim)  # marginal cdf of Z-scores at z under alternative
+        pdf_alternative <- mean(pdf_alternative_sim)    # marginal pdf of Z-scores at z  under alternative
+        icdf_null <- mean(icdf_null_sim)                 # marginal cdf of Z-scores at z under null
+        pdf_null <- mean(pdf_null_sim)                     # marginal pdf of Z-scores at z under null   
+       
+        p_z <- pi_0*pdf_null/(pi_0*pdf_null+(1-pi_0)*pdf_alternative)    #posterior probability of H_0 given z
+      
+        p_Z_gtz <- pi_0*(icdf_null)/(pi_0*(icdf_null)+(1-pi_0)*icdf_alternative)   # post prob null, given Z >= |z|
+        
+        
+        ######################### Some of the following calculations are different from the above as they calculate the probability logOR <= 0 given data (either Z=z or |Z|>=z), rather than the probability of logOR lieing in the null or alternative clusters. These calculations are not reported in the output for the function 
+        
+        ## weights for null and alternative given z
+        w_null <- pdf_null*pi_0
+        w_alt <- pdf_alternative*(1-pi_0)
+        
+        w_null_star <- w_null/(w_null + w_alt)
+        w_alt_star <- w_alt/(w_null + w_alt)
+
+        Prob_theta_lt0_null <- mean((OR_sim_0<=1)*pdf_null_sim)/pdf_null
+        Prob_theta_lt0_alt <- mean((OR_sim_1<=1)*pdf_alternative_sim)/pdf_alternative
+        
+        Prob_theta_lt0_1 <- w_null_star*Prob_theta_lt0_null + w_alt_star*Prob_theta_lt0_alt   #  probability of logOR <= 0 given z
+       
+        ## weights for null and alternative given signfiicance
+        w_null_gtz <- icdf_null*pi_0
+        w_alt_gtz <- icdf_alternative*(1-pi_0)
+        
+        w_null_star_gtz <- w_null_gtz/(w_null_gtz + w_alt_gtz)
+        w_alt_star_gtz <- w_alt_gtz/(w_null_gtz + w_alt_gtz)
+        
+       
+        
+        Prob_theta_lt0_null <- mean((OR_sim_0<=1)*icdf_null_sim)/icdf_null
+        Prob_theta_lt0_alt <- mean((OR_sim_1<=1)*icdf_alternative_sim)/icdf_alternative
+        
+        Prob_theta_lt0_2 <- w_null_star_gtz*Prob_theta_lt0_null + w_alt_star_gtz*Prob_theta_lt0_alt   #  probability of logOR <= 0 given significance
+        
+               
+        return(c("posterior prob treatment effect given significance"=signif(1-p_Z_gtz,3),"posterior prob treatment effect given z"=signif(1-p_z,3),"posterior mean OR given significance"=signif(w_null_star_gtz*mean(OR_sim_0*icdf_null_sim)/mean(icdf_null_sim)+w_alt_star_gtz*mean(OR_sim_1*icdf_alternative_sim)/mean(icdf_alternative_sim   ),3),"posterior mean OR given z"=signif(w_null_star*mean(OR_sim_0*pdf_null_sim)/mean(pdf_null_sim)+w_alt_star*mean(OR_sim_1*pdf_alternative_sim)/mean(pdf_alternative_sim   ),3)))
+}
+
+# probabilities of treatment effect, for a borderline significant p-value under 3 priors in paper (small trial: n=100)
+#sceptical
+post_probs(pi_0=.8,p0=.1,n=100,mu=log(1.1),sigma=0.1,sigma_null=0.05,z=1.96,nsim=10^6)
+#standard
+post_probs(pi_0=.8,p0=.1,n=100,mu=log(1.3),sigma=0.1,sigma_null=0.05,z=1.96,nsim=10^6)
+#optimistic
+post_probs(pi_0=.8,p0=.1,n=100,mu=log(1.5),sigma=0.1,sigma_null=0.05,z=1.96,nsim=10^6)
+
+
+# situation different for larger trial (n=10000)
+#sceptical
+post_probs(pi_0=.8,p0=.1,n=10000,mu=log(1.1),sigma=0.1,sigma_null=0.05,z=1.96,nsim=10^6)
+#standard
+post_probs(pi_0=.8,p0=.1,n=10000,mu=log(1.3),sigma=0.1,sigma_null=0.05,z=1.96,nsim=10^6)
+#optimistic
+post_probs(pi_0=.8,p0=.1,n=10000,mu=log(1.5),sigma=0.1,sigma_null=0.05,z=1.96,nsim=10^6)
+
